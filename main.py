@@ -5,6 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 from Floyd_Warshall import FloydWarshall
 from Bellman_Ford import BellmanFord
 from dijkstra import DijkstraHeap
+from paralleldijsktra import ParallelDijkstraAdjList
 from SPFA import SPFA
 class PPINetwork:
     def __init__(self, file_path=None, min_score=400, weight_type="inverse"):
@@ -170,6 +171,25 @@ class PPINetwork:
         
         return spfa
     
+    def get_adjacency_matrix(self):
+        """
+        获取邻接矩阵表示
+        :return: 邻接矩阵
+        """
+        if self.graph is None:
+            raise ValueError("图尚未创建")
+    
+       # 使用 networkx 的 to_numpy_array 方法将图转换为邻接矩阵
+        return nx.to_numpy_array(self.graph)
+
+    def run_parallel_dijkstra_adjlist(self, num_processes=None):
+        """
+        基于邻接表的并行Dijkstra全源最短路径
+        """
+        adjacency_list = self.get_adjacency_list()
+        pd = ParallelDijkstraAdjList(adjacency_list)
+        all_distances, node_list = pd.all_pairs_shortest_paths(num_processes=num_processes)
+        return all_distances, node_list
     
     def analyze_graph(self):
         """分析图的基本属性"""
@@ -283,87 +303,69 @@ class PPINetwork:
         else:
             return nx.betweenness_centrality(self.graph, weight='weight')
 
-    def export_for_visualization(self, output_file, source=None, target=None, 
-                            highlight_path=True, highlight_central=True, 
-                            centrality_threshold=0.8):
-        """
-        导出用于 Cytoscape 或 Gephi 可视化的网络数据
-        :param output_file: 输出文件路径
-        :param source: 最短路径的源点
-        :param target: 最短路径的目标点
-        :param highlight_path: 是否高亮最短路径
-        :param highlight_central: 是否高亮中心节点
-        :param centrality_threshold: 中心节点阈值
-        """
-    # 创建图的副本
-        G = self.graph.copy()
-    
-        # 计算介数中心性
-        if highlight_central:
-            betweenness = nx.betweenness_centrality(G, weight='weight')
-            # 设置中心节点属性
-            max_bc = max(betweenness.values())
-            for node, bc in betweenness.items():
-                G.nodes[node]['betweenness'] = bc
-                # 标记高中心性节点
-                G.nodes[node]['central'] = 1 if bc > centrality_threshold * max_bc else 0
-        
-        # 标记最短路径上的边
-        if highlight_path and source and target:
-            try:
-                # 计算最短路径
-                path = nx.shortest_path(G, source, target, weight='weight')
-                # 标记路径上的节点
-                for node in path:
-                    G.nodes[node]['on_path'] = 1
-                
-                # 标记路径上的边
-                path_edges = list(zip(path[:-1], path[1:]))
-                for u, v in G.edges:
-                    if (u, v) in path_edges or (v, u) in path_edges:
-                        G[u][v]['on_path'] = 1
-                    else:
-                        G[u][v]['on_path'] = 0
-            except nx.NetworkXNoPath:
-                print(f"警告: {source} 和 {target} 之间没有路径")
-        
-        # 保存为 GraphML 格式
-        nx.write_graphml(G, output_file)
-        print(f"可视化数据已导出至 {output_file}")
 
-    
 # 使用示例
 if __name__ == "__main__":
-    # 1. 初始化并加载数据
+    #  初始化并加载数据
     ppi_network = PPINetwork(
         file_path="7209.protein.physical.links.v12.0.txt",
         min_score=400,
         weight_type="inverse"  # 用于最短路径计算
     )
     
-    # 2. 分析图结构
-   # stats = ppi_network.analyze_graph()
     source_node = "A0A1I7V567"
     target_node = "A0A1I7W541"
+
     print("\n运行 Bellman-Ford 算法:")
     bf = ppi_network.run_bellman_ford(source_node)
     path = bf.get_shortest_path(target_node)
     distance = bf.distances[target_node]
     print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
-    print("PPI网络处理完成！")
- 
-    ppi_network.export_for_visualization(
-        output_file="ppi_visualization.graphml",
-        source=source_node,
-        target=target_node,
-        highlight_path=True,
-        highlight_central=True,
-        centrality_threshold=0.85  # 仅显示前15%的中心节点
-    )
-    '''
+
+    # 运行并行Dijkstra算法
+    print("\n运行 Parallel Dijkstra 算法:")
+    all_distances, node_list = ppi_network.run_parallel_dijkstra_adjlist(num_processes=4)
+
+    # 保存距离矩阵为 CSV
+    distance_df = pd.DataFrame(all_distances, index=node_list, columns=node_list)
+    distance_df.to_csv("parallel_dijkstra_distances.csv")
+    print("距离矩阵已保存为 parallel_dijkstra_distances.csv")
+
+    import seaborn as sns
+    plt.figure(figsize=(10, 8))
+    N = 100
+    sns.heatmap(distance_df.iloc[:N, :N], cmap="viridis", square=True, cbar_kws={'label': 'Distance'})
+    plt.title("Parallel Dijkstra Shortest Path Distance Matrix (Top 50 Nodes)")
+    plt.xlabel("Target Node")
+    plt.ylabel("Source Node")
+    plt.tight_layout()
+    plt.savefig("parallel_dijkstra_distance_heatmap.png", dpi=300)
+    plt.close()
+    print("距离矩阵热力图已保存为 parallel_dijkstra_distance_heatmap.png")
+    #查询某一路径
+    try:
+        source_idx = node_list.index(source_node)
+        target_idx = node_list.index(target_node)
+        distance = all_distances[source_idx][target_idx]
+        # 用networkx查找路径
+        path = nx.shortest_path(ppi_network.get_graph(), source=source_node, target=target_node, weight='weight')
+        print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
+    except ValueError:
+        print("源点或目标点不在节点列表中")
+    except nx.NetworkXNoPath:
+        print(f"{source_node} 到 {target_node} 不连通，无路径。")
+
+    # 保存GraphML文件
+    ppi_network.save_graph("ppi_network.graphml")
+
+    # 可视化并保存图
+    ppi_network.visualize(max_nodes=1000, output_file="ppi_network_visualization.png")
+    
+    #运行 Floyd-Warshall 算法
     print("\n运行 Floyd-Warshall 算法:")
     fw = ppi_network.run_floyd_warshall()
     path = fw.get_path(source_node, target_node)
     distance = fw.get_distance(source_node, target_node)
     print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
-'''
+    
+    print("PPI网络处理完成！")
