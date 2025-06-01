@@ -4,8 +4,12 @@
 
 # 用户手册
 
-## 1. 主要功能
+## 1. 安装方法和主要功能
+**安装方法**
+在dist的文件夹中，有一个文件：ppinetwork-0.1.0-py3-none-any.whl
 
+可以通过以下方法安装
+` pip install path/to/ppinetwork-0.1.0-py3-none-any.whl`
 - **PPI网络构建**：从STRING数据库文件加载蛋白质互作数据，自动过滤低置信度边，支持权重自定义。
 - **最短路径算法**：支持 Bellman-Ford、Dijkstra、SPFA、Floyd-Warshall 四种算法。
 - **网络分析**：节点数、边数、平均度、连通分量、权重统计等。
