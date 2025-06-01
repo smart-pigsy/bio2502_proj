@@ -5,6 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 from Floyd_Warshall import FloydWarshall
 from Bellman_Ford import BellmanFord
 from dijkstra import DijkstraHeap
+from paralleldijkstra import ParallelDijkstraAdjList
 from SPFA import SPFA
 class PPINetwork:
     def __init__(self, file_path=None, min_score=400, weight_type="inverse"):
@@ -170,7 +171,27 @@ class PPINetwork:
         
         return spfa
     
+    def run_dijkstra(self, source):
+        """
+        运行Dijkstra算法计算从源点到所有点的最短路径
+        :param source: 源点
+        :return: DijkstraHeap对象
+        """
+        if source not in self.graph:
+            raise ValueError(f"源点 {source} 不在图中")
+        adjacency_list = self.get_adjacency_list()
+        dijkstra = DijkstraHeap(adjacency_list)
+        dijkstra.shortest_paths_from(source)
+        return dijkstra
     
+    def run_parallel_dijkstra_adjlist(self, num_processes=None):
+        """
+        基于邻接表的并行Dijkstra全源最短路径
+        """
+        adjacency_list = self.get_adjacency_list()
+        pd = ParallelDijkstraAdjList(adjacency_list)
+        all_distances, node_list = pd.all_pairs_shortest_paths(num_processes=num_processes)
+        return all_distances, node_list
     def analyze_graph(self):
         """分析图的基本属性"""
         if self.graph.number_of_nodes() == 0:
@@ -350,8 +371,28 @@ if __name__ == "__main__":
     path = bf.get_shortest_path(target_node)
     distance = bf.distances[target_node]
     print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
-    print("PPI网络处理完成！")
- 
+
+    print("\n运行 Dijkstra 算法:")
+    dijkstra = ppi_network.run_dijkstra(source_node)
+    dijkstra_path = dijkstra.get_shortest_path(target_node)
+    dijkstra_distance = dijkstra.distances[target_node]
+    print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(dijkstra_path)} (距离: {dijkstra_distance:.4f})")
+
+    print("\n运行 Parallel Dijkstra 算法:")
+    all_distances, node_list = ppi_network.run_parallel_dijkstra_adjlist(num_processes=4)
+
+    try:
+        source_idx = node_list.index(source_node)
+        target_idx = node_list.index(target_node)
+        distance = all_distances[source_idx][target_idx]
+        # 用networkx查找路径（只查一对，速度快）
+        path = nx.shortest_path(ppi_network.get_graph(), source=source_node, target=target_node, weight='weight')
+        print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
+    except ValueError:
+        print("源点或目标点不在节点列表中")
+    except nx.NetworkXNoPath:
+        print(f"{source_node} 到 {target_node} 不连通，无路径。")
+'''
     ppi_network.export_for_visualization(
         output_file="ppi_visualization.graphml",
         source=source_node,
@@ -360,7 +401,8 @@ if __name__ == "__main__":
         highlight_central=True,
         centrality_threshold=0.85  # 仅显示前15%的中心节点
     )
-    '''
+
+
     print("\n运行 Floyd-Warshall 算法:")
     fw = ppi_network.run_floyd_warshall()
     path = fw.get_path(source_node, target_node)
