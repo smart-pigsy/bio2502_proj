@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -409,3 +410,376 @@ if __name__ == "__main__":
     distance = fw.get_distance(source_node, target_node)
     print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
 '''
+=======
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+from concurrent.futures import ProcessPoolExecutor
+from Floyd_Warshall import FloydWarshall
+from Bellman_Ford import BellmanFord
+from dijkstra import DijkstraHeap
+from paralleldijsktra import ParallelDijkstraAdjList
+from SPFA import SPFA
+class PPINetwork:
+    def __init__(self, file_path=None, min_score=400, weight_type="inverse"):
+        """
+        初始化PPI网络对象
+        
+        :param file_path: STRING数据库文件路径
+        :param min_score: 最小置信度阈值
+        :param weight_type: 权重类型 ("inverse" 或 "direct")
+        """
+        self.graph = nx.Graph()
+        self.df = None
+        self.node_mapping = {}
+        self.adjacency_list = None
+        if file_path:
+            self.load_data(file_path, min_score, weight_type)
+    
+    def load_data(self, file_path, min_score=400, weight_type="inverse"):
+        """
+        加载并预处理蛋白质互作数据
+        
+        :param file_path: 数据文件路径
+        :param min_score: 最小置信度阈值
+        :param weight_type: 权重类型 ("inverse" 或 "direct")
+        """
+        # 读取原始数据
+        df = pd.read_csv(file_path, sep=' ')
+        
+        # 过滤低置信度互作
+        df = df[df['combined_score'] >= min_score]
+        
+        # 提取关键列并重命名
+        df = df[['protein1', 'protein2', 'combined_score']]
+        df.columns = ['protein1', 'protein2', 'combined_score']
+        
+        # 去除物种前缀 (如"10090.")
+        df['protein1'] = df['protein1'].str.split('.').str[-1]
+        df['protein2'] = df['protein2'].str.split('.').str[-1]
+        
+        # 创建节点映射字典
+        all_nodes = pd.concat([df['protein1'], df['protein2']]).unique()
+        self.node_mapping = {node: idx for idx, node in enumerate(all_nodes)}
+        
+        # 添加反向映射
+        self.id_to_node = {idx: node for node, idx in self.node_mapping.items()}
+        
+        # 保存处理后的数据
+        self.df = df
+        self.weight_type = weight_type
+        
+        # 创建图
+        self.create_graph()
+    
+    def create_graph(self):
+        """创建加权无向图"""
+        if self.df is None:
+            raise ValueError("请先加载数据")
+        
+        # 重置图
+        self.graph = nx.Graph()
+        
+        # 添加所有节点
+        for node in self.node_mapping.keys():
+            self.graph.add_node(node)
+        
+        # 添加带权重的边
+        for _, row in self.df.iterrows():
+            protein1 = row['protein1']
+            protein2 = row['protein2']
+            
+            # 计算权重
+            if self.weight_type == "inverse":
+                # 高置信度 → 低权重 (便于最短路径计算)
+                weight = 1 - (row['combined_score'] / 1000.0)
+            else:
+                # 直接使用combined_score (0-1000)
+                weight = row['combined_score'] / 1000.0
+            
+            # 添加边
+            self.graph.add_edge(protein1, protein2, weight=weight)
+    
+    def get_graph(self):
+        """获取NetworkX图对象"""
+        return self.graph
+    
+    def get_node_mapping(self):
+        """获取节点映射字典"""
+        return self.node_mapping
+    
+    def get_id_to_node(self):
+        """获取ID到节点的映射"""
+        return self.id_to_node
+    
+    def create_adjacency_list(self):
+        """创建邻接表表示"""
+        if self.graph.number_of_nodes() == 0:
+            raise ValueError("图尚未创建")
+        
+        self.adjacency_list = {}
+        
+        # 遍历所有节点
+        for node in self.graph.nodes():
+            self.adjacency_list[node] = []
+            
+            # 获取所有邻居
+            for neighbor in self.graph.neighbors(node):
+                weight = self.graph[node][neighbor]['weight']
+                self.adjacency_list[node].append((neighbor, weight))
+    
+    def get_graph(self):
+        """获取NetworkX图对象"""
+        return self.graph
+    
+    def get_adjacency_list(self):
+        """获取邻接表表示"""
+        if self.adjacency_list is None:
+            self.create_adjacency_list()
+        return self.adjacency_list
+    
+    def run_bellman_ford(self, source):
+        """
+        运行Bellman-Ford算法计算从源点到所有点的最短路径
+        :param source: 源点
+        :return: BellmanFord对象
+        """
+        if source not in self.graph:
+            raise ValueError(f"源点 {source} 不在图中")
+        
+        adjacency_list = self.get_adjacency_list()
+        bf = BellmanFord(adjacency_list)
+        success = bf.shortest_paths_from(source)
+        
+        if not success:
+            print("警告: 检测到负权环，结果可能不准确")
+        
+        return bf
+    
+    def run_floyd_warshall(self):
+        """
+        运行Floyd-Warshall算法计算所有点对的最短路径
+        :return: FloydWarshall对象
+        """
+        adjacency_list = self.get_adjacency_list()
+        fw = FloydWarshall(adjacency_list)
+        fw.compute()
+        return fw
+    
+    def run_spfa(self, source):
+        """
+        运行SPFA算法计算从源点到所有点的最短路径
+        :param source: 源点
+        :return: SPFA对象
+        """
+        if source not in self.graph:
+            raise ValueError(f"源点 {source} 不在图中")
+        
+        adjacency_list = self.get_adjacency_list()
+        spfa = SPFA(adjacency_list)
+        success = spfa.shortest_paths_from(source)
+        
+        if not success:
+            print("警告: 检测到负权环，结果可能不准确")
+        
+        return spfa
+    
+    def get_adjacency_matrix(self):
+        """
+        获取邻接矩阵表示
+        :return: 邻接矩阵
+        """
+        if self.graph is None:
+            raise ValueError("图尚未创建")
+    
+       # 使用 networkx 的 to_numpy_array 方法将图转换为邻接矩阵
+        return nx.to_numpy_array(self.graph)
+
+    def run_parallel_dijkstra_adjlist(self, num_processes=None):
+        """
+        基于邻接表的并行Dijkstra全源最短路径
+        """
+        adjacency_list = self.get_adjacency_list()
+        pd = ParallelDijkstraAdjList(adjacency_list)
+        all_distances, node_list = pd.all_pairs_shortest_paths(num_processes=num_processes)
+        return all_distances, node_list
+    
+    def analyze_graph(self):
+        """分析图的基本属性"""
+        if self.graph.number_of_nodes() == 0:
+            raise ValueError("图尚未创建")
+        
+        print(f"图的基本属性:")
+        print(f"- 节点数: {self.graph.number_of_nodes()}")
+        print(f"- 边数: {self.graph.number_of_edges()}")
+        
+        # 计算平均度
+        degrees = [d for n, d in self.graph.degree()]
+        avg_degree = sum(degrees) / len(degrees) if degrees else 0
+        print(f"- 平均度: {avg_degree:.2f}")
+        
+        # 连通分量分析
+        components = list(nx.connected_components(self.graph))
+        print(f"- 连通分量数: {len(components)}")
+        if components:
+            largest_cc = max(components, key=len)
+            print(f"- 最大连通分量大小: {len(largest_cc)} 节点")
+        
+        # 权重统计
+        if self.graph.number_of_edges() > 0:
+            weights = [d['weight'] for _, _, d in self.graph.edges(data=True)]
+            print(f"- 权重范围: {min(weights):.4f} - {max(weights):.4f}")
+            print(f"- 平均权重: {sum(weights) / len(weights):.4f}")
+        else:
+            print("- 图中没有边")
+        
+        return {
+            "node_count": self.graph.number_of_nodes(),
+            "edge_count": self.graph.number_of_edges(),
+            "avg_degree": avg_degree,
+            "components": len(components),
+            "largest_component": len(largest_cc) if components else 0
+        }
+    
+    def visualize(self, max_nodes=100, output_file=None):
+        """
+        可视化图结构
+        
+        :param max_nodes: 最大可视化节点数
+        :param output_file: 输出文件路径 (可选)
+        """
+        if self.graph.number_of_nodes() == 0:
+            raise ValueError("图尚未创建")
+        
+        # 如果图过大，使用子图
+        if self.graph.number_of_nodes() > max_nodes:
+            # 提取最大连通分量中的前max_nodes个节点
+            largest_cc = max(nx.connected_components(self.graph), key=len)
+            subgraph_nodes = list(largest_cc)[:max_nodes]
+            subgraph = self.graph.subgraph(subgraph_nodes)
+            print(f"图过大，仅可视化前{max_nodes}个节点")
+        else:
+            subgraph = self.graph
+        
+        # 设置可视化参数
+        plt.figure(figsize=(12, 10))
+        pos = nx.spring_layout(subgraph, seed=42)
+        
+        # 绘制节点和边
+        nx.draw_networkx_nodes(subgraph, pos, node_size=50, node_color='skyblue')
+        
+        # 绘制边 - 根据权重设置透明度
+        edges = subgraph.edges(data=True)
+        edge_alphas = [d['weight'] for _, _, d in edges]
+        nx.draw_networkx_edges(subgraph, pos, alpha=0.1)
+        
+        # 添加标签（仅对度高的节点）
+        high_degree_nodes = [n for n, d in subgraph.degree() if d > 5]
+        labels = {n: n for n in high_degree_nodes}
+        nx.draw_networkx_labels(subgraph, pos, labels, font_size=8)
+        
+        plt.title('Protein-Protein Interaction Network')
+        plt.axis('off')
+        plt.tight_layout()
+        
+        # 保存或显示图像
+        if output_file:
+            plt.savefig(output_file, dpi=300)
+            print(f"图像已保存至 {output_file}")
+        else:
+            plt.show()
+        
+        plt.close()
+    
+    def save_graph(self, output_file):
+        """保存图数据为GraphML格式"""
+        if self.graph.number_of_nodes() == 0:
+            raise ValueError("图尚未创建")
+        
+        nx.write_graphml(self.graph, output_file)
+        print(f"图已保存为 {output_file}")
+
+    def calculate_betweenness_centrality(self, k=None):
+        """
+        计算介数中心性
+        
+        :param k: 用于近似的节点数量 (None表示精确计算)
+        :return: 介数中心性字典
+        """
+        if self.graph.number_of_nodes() == 0:
+            raise ValueError("图尚未创建")
+        
+        print(f"计算介数中心性 (k={k if k else '精确'})...")
+        
+        if k and k < self.graph.number_of_nodes():
+            return nx.betweenness_centrality(self.graph, k=k, weight='weight')
+        else:
+            return nx.betweenness_centrality(self.graph, weight='weight')
+
+
+# 使用示例
+if __name__ == "__main__":
+    #  初始化并加载数据
+    ppi_network = PPINetwork(
+        file_path="7209.protein.physical.links.v12.0.txt",
+        min_score=400,
+        weight_type="inverse"  # 用于最短路径计算
+    )
+    
+    source_node = "A0A1I7V567"
+    target_node = "A0A1I7W541"
+
+    print("\n运行 Bellman-Ford 算法:")
+    bf = ppi_network.run_bellman_ford(source_node)
+    path = bf.get_shortest_path(target_node)
+    distance = bf.distances[target_node]
+    print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
+
+    # 运行并行Dijkstra算法
+    print("\n运行 Parallel Dijkstra 算法:")
+    all_distances, node_list = ppi_network.run_parallel_dijkstra_adjlist(num_processes=4)
+
+    # 保存距离矩阵为 CSV
+    distance_df = pd.DataFrame(all_distances, index=node_list, columns=node_list)
+    distance_df.to_csv("parallel_dijkstra_distances.csv")
+    print("距离矩阵已保存为 parallel_dijkstra_distances.csv")
+
+    import seaborn as sns
+    plt.figure(figsize=(10, 8))
+    N = 100
+    sns.heatmap(distance_df.iloc[:N, :N], cmap="viridis", square=True, cbar_kws={'label': 'Distance'})
+    plt.title("Parallel Dijkstra Shortest Path Distance Matrix (Top 50 Nodes)")
+    plt.xlabel("Target Node")
+    plt.ylabel("Source Node")
+    plt.tight_layout()
+    plt.savefig("parallel_dijkstra_distance_heatmap.png", dpi=300)
+    plt.close()
+    print("距离矩阵热力图已保存为 parallel_dijkstra_distance_heatmap.png")
+    #查询某一路径
+    try:
+        source_idx = node_list.index(source_node)
+        target_idx = node_list.index(target_node)
+        distance = all_distances[source_idx][target_idx]
+        # 用networkx查找路径
+        path = nx.shortest_path(ppi_network.get_graph(), source=source_node, target=target_node, weight='weight')
+        print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
+    except ValueError:
+        print("源点或目标点不在节点列表中")
+    except nx.NetworkXNoPath:
+        print(f"{source_node} 到 {target_node} 不连通，无路径。")
+
+    # 保存GraphML文件
+    ppi_network.save_graph("ppi_network.graphml")
+
+    # 可视化并保存图
+    ppi_network.visualize(max_nodes=1000, output_file="ppi_network_visualization.png")
+    
+    #运行 Floyd-Warshall 算法
+    print("\n运行 Floyd-Warshall 算法:")
+    fw = ppi_network.run_floyd_warshall()
+    path = fw.get_path(source_node, target_node)
+    distance = fw.get_distance(source_node, target_node)
+    print(f"从 {source_node} 到 {target_node} 的最短路径: {' → '.join(path)} (距离: {distance:.4f})")
+    
+    print("PPI网络处理完成！")
+>>>>>>> 62e4e39140d863a732c166b1a56c0e79082f0d82
